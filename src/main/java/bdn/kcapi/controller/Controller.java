@@ -149,7 +149,8 @@ public class Controller {
 			
 			System.out.println("INFO: Successfully read "+numPagesTotal+" pages, "+result.size()+" settled orders from KuCoin service");
 			try {
-				Thread.sleep(2000);
+				// pause so the user can see the results before exiting
+				Thread.sleep(5000);
 			}
 			catch(InterruptedException ie) {}
 		}
