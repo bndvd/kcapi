@@ -104,6 +104,8 @@ public class Controller {
 			int numEventsInCurrPage = 0;
 			
 			do {
+				System.out.println("INFO: Querying Page "+idxCurrPage+(numPagesTotal>0 ? " of "+numPagesTotal : "")+" from KuCoin service");
+				
 				Pagination<SettledTradeItem> page = kcClient.loanAPI().querySettledTrade(null, idxCurrPage, pageSize);
 				if (numPagesTotal < 0) {
 					// initialize
@@ -134,14 +136,27 @@ public class Controller {
 					}
 				}
 				
+				// sleep for 100 ms between service calls to avoid the KuCoin Request Rate Limit (up to 10 requests / sec)
+				try {
+					Thread.sleep(100);
+				}
+				catch(InterruptedException ie) {}
+				
 				idxCurrPage++;
 			}
 			while ((idxCurrPage <= numPagesTotal) && (numEventsInCurrPage > 0));
+		
+			
+			System.out.println("INFO: Successfully read "+numPagesTotal+" pages, "+result.size()+" settled orders from KuCoin service");
+			try {
+				Thread.sleep(2000);
+			}
+			catch(InterruptedException ie) {}
 		}
 		catch (IOException ioe) {
 			throw new ControllerException(ioe.getMessage());
 		}
-		
+
 		KcSettledLendOrderEntryComparator ksloec = new KcSettledLendOrderEntryComparator();
 		result.sort(ksloec);
 		
