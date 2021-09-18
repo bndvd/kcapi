@@ -110,6 +110,10 @@ public class Controller {
 				if (numPagesTotal < 0) {
 					// initialize
 					numPagesTotal = page.getTotalPage();
+					// KuCoin does not allow > 100 pages to be queries
+					if (numPagesTotal > 100) {
+						System.err.println("WARNING: # pages: "+numPagesTotal+" exceeded max returnable pages of 100. Will return most recent 100 pages of data.");
+					}
 				}
 				else if (numPagesTotal != page.getTotalPage()) {
 					// total number changed since we started querying, throw an exception
@@ -144,10 +148,10 @@ public class Controller {
 				
 				idxCurrPage++;
 			}
-			while ((idxCurrPage <= numPagesTotal) && (numEventsInCurrPage > 0));
+			while ((idxCurrPage <= numPagesTotal) && (idxCurrPage <= 100) && (numEventsInCurrPage > 0));
 		
 			
-			System.out.println("INFO: Successfully read "+numPagesTotal+" pages, "+result.size()+" settled orders from KuCoin service");
+			System.out.println("INFO: Successfully read "+(idxCurrPage-1)+" pages, "+result.size()+" settled orders from KuCoin service");
 			try {
 				// pause so the user can see the results before exiting
 				Thread.sleep(5000);
