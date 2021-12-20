@@ -9,6 +9,7 @@ import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
+import java.util.Date;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
@@ -69,7 +70,7 @@ public class Controller {
 		System.out.println("INFO: Read "+ksloeList.size()+" events from Settled Lend Order History API call");
 		
 		
-		List<LedgerTransaction> ltList = generateLedgerTransactions(ksloeList);
+		List<LedgerTransaction> ltList = generateLedgerTransactions(ksloeList, kcClient);
 		if (ltList == null) {
 			System.err.println("ERROR: Failed to generate Ledger Transactions");
 		}
@@ -97,6 +98,10 @@ public class Controller {
 	private static List<KcSettledLendOrderEntry> readSettledLendOrderHistory(KucoinRestClient kcClient) throws ControllerException {
 		List<KcSettledLendOrderEntry> result = new ArrayList<>();
 		
+		if (kcClient == null) {
+			throw new ControllerException("kcClient is null");
+		}
+		
 		try {
 			final int pageSize = 50;
 			long numPagesTotal = -1;
@@ -104,7 +109,8 @@ public class Controller {
 			int numEventsInCurrPage = 0;
 			
 			do {
-				System.out.println("INFO: Querying Page "+idxCurrPage+(numPagesTotal>0 ? " of "+numPagesTotal : "")+" from KuCoin service");
+				System.out.println("INFO: Querying Page "+idxCurrPage+(numPagesTotal>0 ? " of " + 
+						( numPagesTotal>100 ? 100 : numPagesTotal ) : "")+" from KuCoin service");
 				
 				Pagination<SettledTradeItem> page = kcClient.loanAPI().querySettledTrade(null, idxCurrPage, pageSize);
 				if (numPagesTotal < 0) {
@@ -169,27 +175,39 @@ public class Controller {
 	}
 	
 	
-	private static List<LedgerTransaction> generateLedgerTransactions(List<KcSettledLendOrderEntry> ksloeList) throws ControllerException {
-		if (ksloeList == null) {
-			throw new ControllerException("KC Event entries or output file is null");
+	private static List<LedgerTransaction> generateLedgerTransactions(List<KcSettledLendOrderEntry> ksloeList,
+			KucoinRestClient kcClient) throws ControllerException {
+		
+		if (ksloeList == null || kcClient == null) {
+			throw new ControllerException("KC Event entries or kcClient is null");
 		}
 		
 		List<LedgerTransaction> result = new ArrayList<>();
 		
 		for (KcSettledLendOrderEntry ksloe : ksloeList) {
 			String acct = ksloe.getCurrency();
-			LocalDateTime dttm = Instant.ofEpochMilli(ksloe.getSettledAt().getTime()).atZone(ZoneId.systemDefault()).toLocalDateTime();
+			Date settledAt = ksloe.getSettledAt();
+			LocalDateTime dttm = Instant.ofEpochMilli(settledAt.getTime()).atZone(ZoneId.systemDefault()).toLocalDateTime();
 			LedgerTransactionType type = LedgerTransactionType.INCOME;
 			String src = "kucoin";
 			String dest = "kucoin";
 			BigDecimal coinAmnt = ksloe.getRepaid().subtract(ksloe.getSize());
 			
 			BigDecimal usdAmnt = null;
+			BigDecimal usdPerUnit = null;
 			if (USD_STABLECOINS.contains(ksloe.getCurrency())) {
 				usdAmnt = coinAmnt;
+				usdPerUnit = BigDecimal.ONE;
+			}
+			else {
+				// read historic rate to determine the USD value of the transaction
+				usdPerUnit = queryHistoricRate(kcClient, acct, settledAt);
+				if (usdPerUnit != null) {
+					usdAmnt = usdPerUnit.multiply(coinAmnt);
+				}
 			}
 			
-			LedgerTransaction lt = new LedgerTransaction(acct, dttm, type, src, dest, coinAmnt, usdAmnt, null, null, null);
+			LedgerTransaction lt = new LedgerTransaction(acct, dttm, type, src, dest, coinAmnt, usdAmnt, usdPerUnit, null, null);
 			result.add(lt);
 		}
 		
@@ -199,6 +217,45 @@ public class Controller {
 		return result;
 	}
 	
+	
+	private static BigDecimal queryHistoricRate(KucoinRestClient kcClient, String currency, Date dttm) throws ControllerException {
+		if (kcClient == null || currency == null || currency.trim().equals("") || dttm == null) {
+			throw new ControllerException("Inputs for historic rate query are null/empty");
+		}
+		
+		BigDecimal result = null;
+		// rates are in USD, proxied by USDT
+		String symbol = currency + "-USDT";
+		long unixTime = dttm.getTime() / 1000L;
+		// query for the rate during the last 60-second interval
+		long startAt = unixTime - 60L;
+		long endAt = unixTime;
+		
+		try {
+			System.out.println("INFO: Querying Historic Rate: "+symbol+" on "+dttm+" from KuCoin service");
+			List<List<String>> rateData = kcClient.historyAPI().getHistoricRates(symbol, startAt, endAt, "1min");
+			if (rateData == null || rateData.isEmpty()) {
+				throw new ControllerException("Historic rate query returned no rate data for "+symbol+", start="+startAt+", end="+endAt);
+			}
+			List<String> rateDataEntry = rateData.get(0);
+			if (rateDataEntry == null || rateDataEntry.size() < 7) {
+				throw new ControllerException("Historic rate query returned corrupt first entry for "+symbol+", start="+startAt+", end="+endAt);
+			}
+			String rateStr = rateDataEntry.get(2);
+			result = new BigDecimal(rateStr);
+		}
+		catch (IOException ioe) {
+			throw new ControllerException(ioe.getMessage());
+		}
+		
+		// sleep for 100 ms between service calls to avoid the KuCoin Request Rate Limit (up to 10 requests / sec)
+		try {
+			Thread.sleep(100);
+		}
+		catch(InterruptedException ie) {}
+		
+		return result;
+	}
 		
 	
 	private static void writeKcEventEntries(List<KcSettledLendOrderEntry> ksloeList, File outputFile) throws ControllerException {
