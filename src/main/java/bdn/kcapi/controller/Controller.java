@@ -248,9 +248,9 @@ public class Controller {
 			throw new ControllerException(ioe.getMessage());
 		}
 		
-		// sleep for 100 ms between service calls to avoid the KuCoin Request Rate Limit (up to 10 requests / sec)
+		// sleep for 1000 ms between service calls to avoid the KuCoin Request Rate Limit
 		try {
-			Thread.sleep(100);
+			Thread.sleep(1000);
 		}
 		catch(InterruptedException ie) {}
 		
