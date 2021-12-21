@@ -4,14 +4,18 @@ import java.io.File;
 import java.io.FileWriter;
 import java.io.IOException;
 import java.math.BigDecimal;
+import java.math.MathContext;
+import java.math.RoundingMode;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
 import java.time.format.DateTimeFormatter;
 import java.util.ArrayList;
 import java.util.Date;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
 
 import org.apache.commons.csv.CSVFormat;
@@ -31,6 +35,7 @@ import bdn.kcapi.model.LedgerTransactionComparator;
 public class Controller {
 	
 	private static final CSVFormat CSV_FORMAT = CSVFormat.EXCEL;
+	private static final MathContext PRECISION = new MathContext(34, RoundingMode.HALF_UP);
 	private static Set<String> USD_STABLECOINS = new HashSet<>();
 	
 	static {
@@ -69,6 +74,10 @@ public class Controller {
 		}
 		System.out.println("INFO: Read "+ksloeList.size()+" events from Settled Lend Order History API call");
 		
+		
+		// build a new KC client for the historical rate queries, lessening the chance of too many requests http error
+		builder = new KucoinClientBuilder().withBaseUrl(baseUrl).withApiKey(key, secret, passphrase);
+		kcClient = builder.buildRestClient();
 		
 		List<LedgerTransaction> ltList = generateLedgerTransactions(ksloeList, kcClient);
 		if (ltList == null) {
@@ -183,6 +192,12 @@ public class Controller {
 		}
 		
 		List<LedgerTransaction> result = new ArrayList<>();
+		Date endAt = new Date();
+		// enforce an initial wait before KuCoin API historic data queries to lessen the chance of too many requests http error
+		boolean initialWait = false;
+		
+		// map for queried historic data by currency
+		Map<String, List<List<String>>> acctToHistoricData = new HashMap<>();
 		
 		for (KcSettledLendOrderEntry ksloe : ksloeList) {
 			String acct = ksloe.getCurrency();
@@ -200,8 +215,26 @@ public class Controller {
 				usdPerUnit = BigDecimal.ONE;
 			}
 			else {
+				List<List<String>> histData = acctToHistoricData.get(acct);
+				if (histData == null) {
+					if (!initialWait) {
+						System.out.println("INFO: Initial wait before Historic Rate queries (60 sec delay)");
+						try {
+							Thread.sleep(60000);
+						}
+						catch(InterruptedException ie) {}
+						initialWait = true;
+					}
+					
+					histData = queryHistoricData(kcClient, acct, settledAt, endAt);
+					if (histData == null) {
+						throw new ControllerException("Historic rate query returned null data for: "+acct);
+					}
+					acctToHistoricData.put(acct, histData);
+				}
+				
 				// read historic rate to determine the USD value of the transaction
-				usdPerUnit = queryHistoricRate(kcClient, acct, settledAt);
+				usdPerUnit = extractHistoricRate(histData, settledAt);
 				if (usdPerUnit != null) {
 					usdAmnt = usdPerUnit.multiply(coinAmnt);
 				}
@@ -218,41 +251,72 @@ public class Controller {
 	}
 	
 	
-	private static BigDecimal queryHistoricRate(KucoinRestClient kcClient, String currency, Date dttm) throws ControllerException {
-		if (kcClient == null || currency == null || currency.trim().equals("") || dttm == null) {
+	private static List<List<String>> queryHistoricData(KucoinRestClient kcClient, String currency, Date startDate, Date endDate)
+			throws ControllerException {
+		
+		if (kcClient == null || currency == null || currency.trim().equals("") ) {
 			throw new ControllerException("Inputs for historic rate query are null/empty");
 		}
 		
-		BigDecimal result = null;
+		List<List<String>> result = null;
 		// rates are in USD, proxied by USDT
 		String symbol = currency + "-USDT";
-		long unixTime = dttm.getTime() / 1000L;
-		// query for the rate during the last 60-second interval
-		long startAt = unixTime - 60L;
+		long unixTime = startDate.getTime() / 1000L;
+		// include the previous 24 hours before start date to ensure at least one data point
+		long startAt = unixTime - (60L * 60L * 24L);
+		unixTime = endDate.getTime() / 1000L;
 		long endAt = unixTime;
 		
+		
+		System.out.println("INFO: Querying Historic Rate: "+symbol+", start date \""+startDate+"\" from KuCoin service (10 sec delay)");
+
+		// sleep for 10 sec between service calls to avoid the KuCoin Request Rate Limit for historic rate query
 		try {
-			System.out.println("INFO: Querying Historic Rate: "+symbol+" on "+dttm+" from KuCoin service");
-			List<List<String>> rateData = kcClient.historyAPI().getHistoricRates(symbol, startAt, endAt, "1min");
+			Thread.sleep(10000);
+		}
+		catch(InterruptedException ie) {}
+		
+		try {
+			List<List<String>> rateData = kcClient.historyAPI().getHistoricRates(symbol, startAt, endAt, "1day");
 			if (rateData == null || rateData.isEmpty()) {
 				throw new ControllerException("Historic rate query returned no rate data for "+symbol+", start="+startAt+", end="+endAt);
 			}
-			List<String> rateDataEntry = rateData.get(0);
-			if (rateDataEntry == null || rateDataEntry.size() < 7) {
-				throw new ControllerException("Historic rate query returned corrupt first entry for "+symbol+", start="+startAt+", end="+endAt);
-			}
-			String rateStr = rateDataEntry.get(2);
-			result = new BigDecimal(rateStr);
+			result = rateData;
 		}
 		catch (IOException ioe) {
 			throw new ControllerException(ioe.getMessage());
 		}
 		
-		// sleep for 1000 ms between service calls to avoid the KuCoin Request Rate Limit
-		try {
-			Thread.sleep(1000);
+		return result;
+	}
+	
+	
+	private static BigDecimal extractHistoricRate(List<List<String>> data, Date dttm) throws ControllerException {
+		if (data == null || data.isEmpty() || dttm == null) {
+			System.err.println("Inputs for extractHistoricRate are null/empty");
+			return null;
 		}
-		catch(InterruptedException ie) {}
+		
+		BigDecimal result = null;
+		long unixDttm = dttm.getTime() / 1000L;
+
+		for (List<String> candle : data) {
+			if (candle == null || candle.size() < 7) {
+				throw new ControllerException("extractHistoricRate encountered corrupt candle entry");
+			}
+			long timestamp = Long.valueOf(candle.get(0));
+			
+			if (timestamp < unixDttm) {
+				String highPriceStr = candle.get(3);
+				String lowPriceStr = candle.get(4);
+				
+				BigDecimal highPrice = new BigDecimal(highPriceStr);
+				BigDecimal lowPrice = new BigDecimal(lowPriceStr);
+				// take the average of highest and lowest price
+				result = highPrice.add(lowPrice).divide(new BigDecimal(2), PRECISION);
+				break;
+			}
+		}
 		
 		return result;
 	}
