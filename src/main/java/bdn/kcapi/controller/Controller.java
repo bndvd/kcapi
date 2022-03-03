@@ -51,7 +51,9 @@ public class Controller {
 	}
 	
 	
-	public static void process(String baseUrl, String key, String secret, String passphrase, String outputFolder) throws ControllerException {
+	public static void process(String baseUrl, String key, String secret, String passphrase, String outputFolder,
+			Integer delayHistQueries, String[] coinsToQueryHistoricals) throws ControllerException {
+		
 		if (baseUrl == null || baseUrl.trim().equals("") || key == null || key.trim().equals("") || secret == null || secret.trim().equals("") || 
 				passphrase == null || passphrase.trim().equals("") || outputFolder == null || outputFolder.trim().equals("")) {
 			throw new ControllerException("Inputs (key, secret, passphrase, outfolder) are null/insufficient");
@@ -79,7 +81,7 @@ public class Controller {
 		builder = new KucoinClientBuilder().withBaseUrl(baseUrl).withApiKey(key, secret, passphrase);
 		kcClient = builder.buildRestClient();
 		
-		List<LedgerTransaction> ltList = generateLedgerTransactions(ksloeList, kcClient);
+		List<LedgerTransaction> ltList = generateLedgerTransactions(ksloeList, kcClient, delayHistQueries, coinsToQueryHistoricals);
 		if (ltList == null) {
 			System.err.println("ERROR: Failed to generate Ledger Transactions");
 		}
@@ -185,9 +187,9 @@ public class Controller {
 	
 	
 	private static List<LedgerTransaction> generateLedgerTransactions(List<KcSettledLendOrderEntry> ksloeList,
-			KucoinRestClient kcClient) throws ControllerException {
+			KucoinRestClient kcClient, Integer delayHistQueries, String[] coinsToQueryHistoricals) throws ControllerException {
 		
-		if (ksloeList == null || kcClient == null) {
+		if (ksloeList == null || kcClient == null || delayHistQueries == null) {
 			throw new ControllerException("KC Event entries or kcClient is null");
 		}
 		
@@ -198,6 +200,15 @@ public class Controller {
 		
 		// map for queried historic data by currency
 		Map<String, List<List<String>>> acctToHistoricData = new HashMap<>();
+		
+		Set<String> coinsToQueryHistoricalsSet = null;
+		if (coinsToQueryHistoricals != null && coinsToQueryHistoricals.length > 0) {
+			coinsToQueryHistoricalsSet = new HashSet<String>();
+			for (String c : coinsToQueryHistoricals) {
+				coinsToQueryHistoricalsSet.add(c);
+			}
+		}
+		
 		
 		for (KcSettledLendOrderEntry ksloe : ksloeList) {
 			String acct = ksloe.getCurrency();
@@ -214,19 +225,19 @@ public class Controller {
 				usdAmnt = coinAmnt;
 				usdPerUnit = BigDecimal.ONE;
 			}
-			else {
+			else if (coinsToQueryHistoricalsSet == null || coinsToQueryHistoricalsSet.contains(acct)) {
 				List<List<String>> histData = acctToHistoricData.get(acct);
 				if (histData == null) {
 					if (!initialWait) {
-						System.out.println("INFO: Initial wait before Historic Rate queries (60 sec delay)");
+						System.out.println("INFO: Initial wait before Historic Rate queries ("+(delayHistQueries/1000)+" sec delay)");
 						try {
-							Thread.sleep(60000);
+							Thread.sleep(delayHistQueries);
 						}
 						catch(InterruptedException ie) {}
 						initialWait = true;
 					}
 					
-					histData = queryHistoricData(kcClient, acct, settledAt, endAt);
+					histData = queryHistoricData(kcClient, acct, settledAt, endAt, delayHistQueries);
 					if (histData == null) {
 						throw new ControllerException("Historic rate query returned null data for: "+acct);
 					}
@@ -251,10 +262,10 @@ public class Controller {
 	}
 	
 	
-	private static List<List<String>> queryHistoricData(KucoinRestClient kcClient, String currency, Date startDate, Date endDate)
-			throws ControllerException {
+	private static List<List<String>> queryHistoricData(KucoinRestClient kcClient, String currency, Date startDate, Date endDate,
+			Integer delayHistQueries) throws ControllerException {
 		
-		if (kcClient == null || currency == null || currency.trim().equals("") ) {
+		if (kcClient == null || currency == null || currency.trim().equals("") || delayHistQueries == null) {
 			throw new ControllerException("Inputs for historic rate query are null/empty");
 		}
 		
@@ -268,11 +279,12 @@ public class Controller {
 		long endAt = unixTime;
 		
 		
-		System.out.println("INFO: Querying Historic Rate: "+symbol+", start date \""+startDate+"\" from KuCoin service (10 sec delay)");
+		System.out.println("INFO: Querying Historic Rate: "+symbol+", start date \""+startDate+"\" from KuCoin service ("+
+				(delayHistQueries/1000)+" sec delay)");
 
-		// sleep for 10 sec between service calls to avoid the KuCoin Request Rate Limit for historic rate query
+		// sleep between service calls to avoid the KuCoin Request Rate Limit for historic rate query
 		try {
-			Thread.sleep(10000);
+			Thread.sleep(delayHistQueries);
 		}
 		catch(InterruptedException ie) {}
 		
@@ -293,7 +305,6 @@ public class Controller {
 	
 	private static BigDecimal extractHistoricRate(List<List<String>> data, Date dttm) throws ControllerException {
 		if (data == null || data.isEmpty() || dttm == null) {
-			System.err.println("Inputs for extractHistoricRate are null/empty");
 			return null;
 		}
 		
