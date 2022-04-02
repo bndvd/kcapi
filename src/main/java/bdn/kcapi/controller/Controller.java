@@ -52,10 +52,11 @@ public class Controller {
 	
 	
 	public static void process(String baseUrl, String key, String secret, String passphrase, String outputFolder,
-			Integer delayHistQueries, String[] coinsToQueryHistoricals) throws ControllerException {
+			Integer delayPageQueries, Integer delayHistQueries, String[] coinsToQueryHistoricals) throws ControllerException {
 		
 		if (baseUrl == null || baseUrl.trim().equals("") || key == null || key.trim().equals("") || secret == null || secret.trim().equals("") || 
-				passphrase == null || passphrase.trim().equals("") || outputFolder == null || outputFolder.trim().equals("")) {
+				passphrase == null || passphrase.trim().equals("") || outputFolder == null || outputFolder.trim().equals("") ||
+				delayPageQueries == null || delayHistQueries == null) {
 			throw new ControllerException("Inputs (key, secret, passphrase, outfolder) are null/insufficient");
 		}
 		
@@ -70,7 +71,7 @@ public class Controller {
 		
 		System.out.println("INFO: Initiating Settled Lend Order History API call");
 		
-		List<KcSettledLendOrderEntry> ksloeList = readSettledLendOrderHistory(kcClient);
+		List<KcSettledLendOrderEntry> ksloeList = readSettledLendOrderHistory(kcClient, delayPageQueries);
 		if (ksloeList == null) {
 			throw new ControllerException("Settled Lend Order History API call failed to generate list");
 		}
@@ -106,11 +107,12 @@ public class Controller {
 	}
 	
 	
-	private static List<KcSettledLendOrderEntry> readSettledLendOrderHistory(KucoinRestClient kcClient) throws ControllerException {
+	private static List<KcSettledLendOrderEntry> readSettledLendOrderHistory(KucoinRestClient kcClient, Integer delayPageQueries)
+			throws ControllerException {
 		List<KcSettledLendOrderEntry> result = new ArrayList<>();
 		
-		if (kcClient == null) {
-			throw new ControllerException("kcClient is null");
+		if (kcClient == null || delayPageQueries == null) {
+			throw new ControllerException("readSettledLendOrderHistory received null argument(s)");
 		}
 		
 		try {
@@ -157,9 +159,9 @@ public class Controller {
 					}
 				}
 				
-				// sleep for 100 ms between service calls to avoid the KuCoin Request Rate Limit (up to 10 requests / sec)
+				// sleep between service calls to avoid the KuCoin Request Rate Limit (up to 10 requests / sec)
 				try {
-					Thread.sleep(100);
+					Thread.sleep(delayPageQueries);
 				}
 				catch(InterruptedException ie) {}
 				

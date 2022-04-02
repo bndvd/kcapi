@@ -14,7 +14,17 @@ public class Main {
 			String secret = args[2];
 			String passphrase = args[3];
 			String outputFolder = args[4];
-			String delayHistQueriesStr = args[5];
+			
+			String delayPageQueriesStr = args[5];
+			Integer delayPageQueries = 10000;
+			try {
+				delayPageQueries = Integer.parseInt(delayPageQueriesStr);
+			}
+			catch (Exception exc) {
+				System.err.println("ERROR in parsing delay-page: " + exc.getMessage());
+			}
+			
+			String delayHistQueriesStr = args[6];
 			Integer delayHistQueries = 60000;
 			try {
 				delayHistQueries = Integer.parseInt(delayHistQueriesStr);
@@ -24,22 +34,22 @@ public class Main {
 			}
 			
 			String[] coinsToQueryHistoricals = null;
-			if (args.length > 6) {
-				coinsToQueryHistoricals = new String[args.length-6];
-				for (int i = 6; i < args.length; i++) {
-					coinsToQueryHistoricals[i-6] = args[i];
+			if (args.length > 7) {
+				coinsToQueryHistoricals = new String[args.length-7];
+				for (int i = 7; i < args.length; i++) {
+					coinsToQueryHistoricals[i-7] = args[i];
 				}
 			}
 			
 			try {
-				Controller.process(baseUrl, key, secret, passphrase, outputFolder, delayHistQueries, coinsToQueryHistoricals);
+				Controller.process(baseUrl, key, secret, passphrase, outputFolder, delayPageQueries, delayHistQueries, coinsToQueryHistoricals);
 			}
 			catch (ControllerException exc) {
 				System.err.println("ERROR: " + exc.getMessage());
 			}
 		}
 		else {
-			System.err.println("ERROR: Usage: {java-main} urlbase key secret passphrase outfolder delay-hist [coins]");
+			System.err.println("ERROR: Usage: {java-main} urlbase key secret passphrase outfolder delay-page delay-hist [coins]");
 		}
 		
 		System.out.println("INFO: KC-API EXITED");
