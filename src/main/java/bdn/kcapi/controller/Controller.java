@@ -52,7 +52,7 @@ public class Controller {
 	
 	
 	public static void process(String baseUrl, String key, String secret, String passphrase, String outputFolder,
-			Integer delayPageQueries, Integer delayHistQueries, String[] coinsToQueryHistoricals) throws ControllerException {
+			Integer delayPageQueries, Integer delayHistQueries, Date startDate, String[] coinsToQueryHistoricals) throws ControllerException {
 		
 		if (baseUrl == null || baseUrl.trim().equals("") || key == null || key.trim().equals("") || secret == null || secret.trim().equals("") || 
 				passphrase == null || passphrase.trim().equals("") || outputFolder == null || outputFolder.trim().equals("") ||
@@ -71,7 +71,7 @@ public class Controller {
 		
 		System.out.println("INFO: Initiating Settled Lend Order History API call");
 		
-		List<KcSettledLendOrderEntry> ksloeList = readSettledLendOrderHistory(kcClient, delayPageQueries);
+		List<KcSettledLendOrderEntry> ksloeList = readSettledLendOrderHistory(kcClient, startDate, delayPageQueries);
 		if (ksloeList == null) {
 			throw new ControllerException("Settled Lend Order History API call failed to generate list");
 		}
@@ -107,7 +107,7 @@ public class Controller {
 	}
 	
 	
-	private static List<KcSettledLendOrderEntry> readSettledLendOrderHistory(KucoinRestClient kcClient, Integer delayPageQueries)
+	private static List<KcSettledLendOrderEntry> readSettledLendOrderHistory(KucoinRestClient kcClient, Date startDate, Integer delayPageQueries)
 			throws ControllerException {
 		List<KcSettledLendOrderEntry> result = new ArrayList<>();
 		
@@ -156,6 +156,16 @@ public class Controller {
 								sti.getNote()
 								);
 						result.add(ksloe);
+					}
+				}
+				
+				// if this page includes entries before start date, stop querying for more pages
+				if (startDate != null && ! result.isEmpty()) {
+					KcSettledLendOrderEntry lastKsloe = result.get(result.size()-1);
+					Date lastKsloeDate = lastKsloe.getSettledAt();
+					if (lastKsloeDate.before(startDate)) {
+						System.out.println("INFO: Read settled order with date "+lastKsloeDate+" prior to startDate "+startDate+". Stopping further reads.");
+						break;
 					}
 				}
 				
